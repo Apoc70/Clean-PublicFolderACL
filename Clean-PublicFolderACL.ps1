@@ -29,7 +29,7 @@ Revision History
 1.1     Fixed group replacement logic
 	
 .PARAMETER RootPublicFolder
-Root public folder for recurse checking of ACLs
+Root public folder for recurse checkign of ACLs
 
 .PARAMETER PublicFolderServer
 Exchange public folder server to query and write to
@@ -37,8 +37,8 @@ Exchange public folder server to query and write to
 .PARAMETER ValidateOnly
 Only validate ACL, do not make any changes. Affects only ACL entries which are not "fully orphaned" users (S-1-*)
 
-.PARAMETER SkipOrphanedUserCheck
-Skip orphaned users check 
+.PARAMETER SkipOrphanedUserCleanup
+Skip orphaned users (SID only users) cleanup  
  
 .EXAMPLE
 Validate ACLs on public folder \MYPF and all of it's child public folders on Exchange server EX200701
@@ -50,14 +50,14 @@ Clean ACLs on public folder \MYPF and all of it's child public folders on Exchan
 
 #>
 Param(
-    [parameter(Mandatory=$true,HelpMessage='Root public folder for recurse checking of ACLs')]
+    [parameter(Mandatory=$true,HelpMessage='Root public folder for recurse checkign of ACLs')]
         [string]$RootPublicFolder,  
     [parameter(Mandatory=$true,HelpMessage='Public folder server')]
         [string]$PublicFolderServer,
     [parameter(Mandatory=$false)]
         [switch]$ValidateOnly,
     [parameter(Mandatory=$false)]
-        [switch]$SkipOrphanedUserCheck
+        [switch]$SkipOrphanedUserCleanup
 )
 
 Import-Module ActiveDirectory
@@ -69,12 +69,15 @@ $PublicFolders = Get-PublicFolder $RootPublicFolder -Recurse -ResultSize Unlimit
 if($PublicFolders -ne $null) {
 
     # Clean orphaned users
-    if(-not ($SkipOrphanedUserCheck)) {
+    if(-not ($SkipOrphanedUserCleanup)) {
+    
         Write-Host 'Cleaning orphaned users'
-        $PublicFolders | Get-PublicFolderClientPermission | ?{$_.User -like "NT User:S-1-*"} | % {Remove-PublicFolderClientPermission -Identity $_.Identity -User $_.User -Access $_.AccessRights -Confirm:$false}
+        $PublicFolders | Get-PublicFolderClientPermission | Where-Object{$_.User -like "NT User:S-1-*"} | ForEach-Object {Remove-PublicFolderClientPermission -Identity $_.Identity -User $_.User -Access $_.AccessRights -Confirm:$false}
+        
     }
     else {
-        Write-Host 'Skipping orphaned user check!'
+        $OrphanedUserCount = ($PublicFolders | Get-PublicFolderClientPermission | Where-Object{$_.User -like "NT User:S-1-*"} | Measure-Object).Count
+        Write-Host "Orphaned user cleanup skipped! ($($OrphanedUserCount)) ACL objects found"
     }
 
     if($ValidateOnly) {
@@ -83,17 +86,18 @@ if($PublicFolders -ne $null) {
     else {
         Write-Host 'Checking old users - with REMOVE/REPLACE'
     }
-    $PublicFolderPermissions = $PublicFolders | Get-PublicFolderClientPermission -Server $PublicFolderServer | ?{$_.User -like "NT User:*"}
+    $PublicFolderPermissions = $PublicFolders | Get-PublicFolderClientPermission -Server $PublicFolderServer | Where-Object{$_.User -like "NT User:*"}
 
 
     foreach($Permission in $PublicFolderPermissions) {
-        [string]$User = ($Permission.User -Replace 'NT User:','').Split('\')[1]
+        if(-Not ([string]$Permission.User).StartsWith('NT User:S-1-*')) {
+            [string]$User = ($Permission.User -Replace 'NT User:','').Split('\')[1]
+        }
         
         $PFIdentity = $Permission.Identity
         
         try {
-            # try ADUser first
-            # Write-Host "User: [$($User)]"
+            
             $ADObject = Get-User -Identity $User -ErrorAction SilentlyContinue
         }
         catch {}
@@ -120,7 +124,15 @@ if($PublicFolders -ne $null) {
             if($ADObject.ObjectClass -contains 'user') {
                 # USER
                 
-                $ADUser = Get-ADUser -Identity $User
+                if($User -ne '') {
+                
+                    $ADUser = Get-ADUser -Identity $User
+                    
+                }
+                else {
+                    Write-Host "| SKIPPING user $($Permission.User) in $($PFIdentity)" 
+                    break
+                }
                 
                 if($ADUser.Enabled -eq $true) {
                 
