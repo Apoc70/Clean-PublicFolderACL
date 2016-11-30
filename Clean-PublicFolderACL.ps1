@@ -1,50 +1,52 @@
 <#
-  .SYNOPSIS
-  Remove orphaned users and groups from legacy public folder ACLs 
+    .SYNOPSIS
+    Remove orphaned users and groups from legacy public folder ACLs 
    
-  Thomas Stensitzki
+   	Thomas Stensitzki
 	
-  THIS CODE IS MADE AVAILABLE AS IS, WITHOUT WARRANTY OF ANY KIND. THE ENTIRE 
-  RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS WITH THE USER.
+	THIS CODE IS MADE AVAILABLE AS IS, WITHOUT WARRANTY OF ANY KIND. THE ENTIRE 
+	RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS WITH THE USER.
 	
-  Version 1.0, 2016-11-29
+	Version 1.1, 2016-11-30
 
-  Ideas, comments and suggestions to support@granikos.eu 
+    Ideas, comments and suggestions to support@granikos.eu 
  
-  .LINK  
-  More information can be found at http://scripts.granikos.eu
+    .LINK  
+    More information can be found at http://scripts.granikos.eu
 
-  .DESCRIPTION
-  This scripts removes or updates users in legacy public folder ACLs. This reduces the likelihood of legacy public folder migration errors due to corrupted ACLs.
+    .DESCRIPTION
+	This scripts removes or updates users in legacy public folder ACLs
     
-  .NOTES 
-  Requirements 
-  - Windows Server 2008 R2 SP1, Windows Server 2012 or Windows Server 2012 R2  
-  - Exchange Server 2007/2010
+    .NOTES 
+    Requirements 
+    - Windows Server 2008 R2  
+    - Exchange Server 2007/2010
+    - Exchange Management Shell
 
-  Revision History 
-  -------------------------------------------------------------------------------- 
-  1.0     Initial community release 
+    Revision History 
+    -------------------------------------------------------------------------------- 
+    1.0     Initial community release 
+    1.1     Fixed group replacement logic
 	
-  .PARAMETER RootPublicFolder
-  Root public folder for recurse checkign of ACLs
+	.PARAMETER RootPublicFolder
+    Root public folder for recurse checkign of ACLs
 
-  .PARAMETER PublicFolderServer
-  Exchange public folder server to query and write to
+    .PARAMETER PublicFolderServer
+    Exchange public folder server to query and write to
 
-  .PARAMETER ValidateOnly
-  Only validate ACL, do not make any changes. Affects only ACL entries which are not "fully orphaned" users (S-1-*)
+    .PARAMETER ValidateOnly
+    Only validate ACL, do not make any changes. Affects only ACL entries which are not "fully orphaned" users (S-1-*)
 
-  .PARAMETER SkipOrphanedUserCheck
-  Skip orphaned users check 
+    .PARAMETER SkipOrphanedUserCheck
+    Skip orphaned users check 
  
-  .EXAMPLE
-  Validate ACLs on public folder \MYPF and all of it's child public folders on Exchange server EX200701
-  .\Clean-PublicFolderACL.ps1 -RootPublicFolder "\MYPF" -PublicFolderServer EX200701 -ValidateOnly
+	.EXAMPLE
+    Validate ACLs on public folder \MYPF and all of it's child public folders on Exchange server EX200701
+    .\Clean-PublicFolderACL.ps1 -RootPublicFolder "\MYPF" -PublicFolderServer EX200701 -ValidateOnly
 
-  .EXAMPLE
-  Clean ACLs on public folder \MYPF and all of it's child public folders on Exchange server EX200701
-  .\Clean-PublicFolderACL.ps1 -RootPublicFolder "\MYPF" -PublicFolderServer EX200701
+    .EXAMPLE
+    Clean ACLs on public folder \MYPF and all of it's child public folders on Exchange server EX200701
+    .\Clean-PublicFolderACL.ps1 -RootPublicFolder "\MYPF" -PublicFolderServer EX200701
 
 #>
 Param(
@@ -55,7 +57,7 @@ Param(
     [parameter(Mandatory=$false)]
         [switch]$ValidateOnly,
     [parameter(Mandatory=$false)]
-        [switch]$SkipOrphanedUserCheck       
+        [switch]$SkipOrphanedUserCheck
 )
 
 Import-Module ActiveDirectory
@@ -67,7 +69,7 @@ $PublicFolders = Get-PublicFolder $RootPublicFolder -Recurse -ResultSize Unlimit
 # Clean orphaned users
 if(-not ($SkipOrphanedUserCheck)) {
     Write-Host 'Cleaning orphaned users'
-    $PublicFolders | Get-PublicFolderClientPermission | Where-Object{$_.User -like "NT User:S-1-*"} | ForEach-Object {Remove-PublicFolderClientPermission -Identity $_.Identity -User $_.User -Access $_.AccessRights -Confirm:$false}
+    $PublicFolders | Get-PublicFolderClientPermission | ?{$_.User -like "NT User:S-1-*"} | % {Remove-PublicFolderClientPermission -Identity $_.Identity -User $_.User -Access $_.AccessRights -Confirm:$false}
 }
 else {
     Write-Host 'Skipping orphaned user check!'
@@ -79,7 +81,7 @@ if($ValidateOnly) {
 else {
     Write-Host 'Checking old users - with REMOVE/REPLACE'
 }
-$PublicFolderPermissions = $PublicFolders | Get-PublicFolderClientPermission -Server $PublicFolderServer | Where-Object{$_.User -like "NT User:*"}
+$PublicFolderPermissions = $PublicFolders | Get-PublicFolderClientPermission -Server $PublicFolderServer | ?{$_.User -like "NT User:*"}
 
 foreach($Permission in $PublicFolderPermissions) {
     [string]$User = ($Permission.User -Replace 'NT User:','').Split('\')[1]
@@ -88,6 +90,7 @@ foreach($Permission in $PublicFolderPermissions) {
     
     try {
         # try ADUser first
+        # Write-Host "User: [$($User)]"
         $ADObject = Get-User -Identity $User -ErrorAction SilentlyContinue
     }
     catch {}
@@ -135,26 +138,31 @@ foreach($Permission in $PublicFolderPermissions) {
                 
                 if(!($ValidateOnly)) {
                     Remove-PublicFolderClientPermission -Identity $Permission.Identity -User $Permission.User -Access $Permission.AccessRights -Confirm:$false -Server $PublicFolderServer
-                    
-                    if($Recipient -ne $null) {
-                        Add-PublicFolderClientPermission -Identity $Permission.Identity -User $User -AccessRights $Permission.AccessRights -Server $PublicFolderServer
-                    }
                 }
             }
         }
         else {
             # GROUP
-            
-            Write-Host "| Remove group $($Permission.User) in $($PFIdentity)" 
-            
-            if(!($ValidateOnly)) {
-            
-                Remove-PublicFolderClientPermission -Identity $Permission.Identity -User $Permission.User -Access $Permission.AccessRights -Confirm:$false -Server $PublicFolderServer
+            if($Recipient -ne $null) {
                 
-                if($Recipient -ne $null) {
+                Write-Host "| Replace group $($Permission.User) in $($PFIdentity)" 
+                
+                if(!($ValidateOnly)) {
+
+                    Remove-PublicFolderClientPermission -Identity $Permission.Identity -User $Permission.User -Access $Permission.AccessRights -Confirm:$false -Server $PublicFolderServer
                     Add-PublicFolderClientPermission -Identity $Permission.Identity -User $User -AccessRights $Permission.AccessRights -Server $PublicFolderServer
                 }
             }
+            else {
+            
+                Write-Host "| Remove group $($Permission.User) in $($PFIdentity)" 
+
+                if(!($ValidateOnly)) {
+                
+                    Remove-PublicFolderClientPermission -Identity $Permission.Identity -User $Permission.User -Access $Permission.AccessRights -Confirm:$false -Server $PublicFolderServer
+                }
+            }
+
         }
     }
     
