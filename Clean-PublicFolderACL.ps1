@@ -7,7 +7,7 @@ Thomas Stensitzki
 THIS CODE IS MADE AVAILABLE AS IS, WITHOUT WARRANTY OF ANY KIND. THE ENTIRE 
 RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS WITH THE USER.
 	
-Version 1.1, 2016-11-30
+Version 1.2, 2016-12-01
 
 Ideas, comments and suggestions to support@granikos.eu 
  
@@ -16,6 +16,12 @@ More information can be found at http://scripts.granikos.eu
 
 .DESCRIPTION
 This scripts removes or updates users in legacy public folder ACLs
+
+- Remove users which haven been deleted in Active Directory and cannot be resolved. Such users show up in ACL as NT User:S-1-*
+- Clean up users and groups
+  - Remove user, if object is disabled in Active Directory or is not mail enabled anymore
+  - Replace user, if object still exists in AD and is mail enabled, but ACL notation is NT User:DOMAIN\User
+  - Remove group, if group is not a mail enabled security group
     
 .NOTES 
 Requirements 
@@ -27,6 +33,7 @@ Revision History
 -------------------------------------------------------------------------------- 
 1.0     Initial community release 
 1.1     Fixed group replacement logic
+1.2     Script optimzation
 	
 .PARAMETER RootPublicFolder
 Root public folder for recurse checkign of ACLs
@@ -60,7 +67,7 @@ Param(
         [switch]$SkipOrphanedUserCleanup
 )
 
-Import-Module ActiveDirectory
+Import-Module -Name ActiveDirectory
 
 # Fetch public folders
 Write-Host "Fetching Public Folders $($RootPublicFolder)"
@@ -68,37 +75,44 @@ $PublicFolders = Get-PublicFolder $RootPublicFolder -Recurse -ResultSize Unlimit
 
 if($PublicFolders -ne $null) {
 
-    # Clean orphaned users
+    # Fetch public folder permissions only once
+    $FullPublicFolderPermissions = $PublicFolders | Get-PublicFolderClientPermission
+
+    # Clean orphaned users -> NT User:S-1-*
     if(-not ($SkipOrphanedUserCleanup)) {
     
         Write-Host 'Cleaning orphaned users'
-        $PublicFolders | Get-PublicFolderClientPermission | Where-Object{$_.User -like "NT User:S-1-*"} | ForEach-Object {Remove-PublicFolderClientPermission -Identity $_.Identity -User $_.User -Access $_.AccessRights -Confirm:$false}
+        $FullPublicFolderPermissions | Where-Object {$_.User -like 'NT User:S-1-*'} | ForEach-Object {Remove-PublicFolderClientPermission -Identity $_.Identity -User $_.User -Access $_.AccessRights -Confirm:$false}
         
     }
     else {
-        $OrphanedUserCount = ($PublicFolders | Get-PublicFolderClientPermission | Where-Object{$_.User -like "NT User:S-1-*"} | Measure-Object).Count
-        Write-Host "Orphaned user cleanup skipped! ($($OrphanedUserCount)) ACL objects found"
+        Write-Host 'Skipping orphaned user cleanup, but still counting number of orphaned users'
+        
+        $OrphanedUserCount = ($FullPublicFolderPermissions | Where-Object {$_.User -like 'NT User:S-1-*'} | Measure-Object).Count
+        
+        Write-Host "| ($($OrphanedUserCount)) ACL objects found"
+        
     }
 
-    if($ValidateOnly) {
+    if($ValidateOnly) {    
         Write-Host 'Checking old users - VALIDATE ONLY'
     }
-    else {
-        Write-Host 'Checking old users - with REMOVE/REPLACE'
+    else {    
+        Write-Host 'Checking old users - with REMOVE/REPLACE'        
     }
-    $PublicFolderPermissions = $PublicFolders | Get-PublicFolderClientPermission -Server $PublicFolderServer | Where-Object{$_.User -like "NT User:*"}
-
+    
+    # $PublicFolderPermissions = $PublicFolders | Get-PublicFolderClientPermission -Server $PublicFolderServer | Where-Object{$_.User -like "NT User:*"}
+    $PublicFolderPermissions = $FullPublicFolderPermissions | Where-Object {($_.User -notlike 'NT User:S-1-*') -and ($_.User -like 'NT User:*')}
 
     foreach($Permission in $PublicFolderPermissions) {
-        if(-Not ([string]$Permission.User).StartsWith('NT User:S-1-*')) {
-            [string]$User = ($Permission.User -Replace 'NT User:','').Split('\')[1]
-        }
+        # Split ACL entry and get samAccountname only
+        [string]$User = ($Permission.User -Replace 'NT User:','').Split('\')[1]
         
+        # Cache current public folder identity
         $PFIdentity = $Permission.Identity
         
         try {
-            
-            $ADObject = Get-User -Identity $User -ErrorAction SilentlyContinue
+            $ADObject = Get-User -Identity $User -ErrorAction SilentlyContinue 
         }
         catch {}
         
@@ -110,7 +124,7 @@ if($PublicFolders -ne $null) {
         }
         
         if($ADObject -ne $null) {
-            # Lookup success
+            # AD Lookup success
             
             $Recipient = $null
             
@@ -119,7 +133,7 @@ if($PublicFolders -ne $null) {
             }
             catch { }
 
-            Write-Verbose "$($User) | $($ADObject.ObjectClass)"
+            # Write-Host "$($User) | $($ADObject.ObjectClass)"
                     
             if($ADObject.ObjectClass -contains 'user') {
                 # USER
@@ -128,10 +142,6 @@ if($PublicFolders -ne $null) {
                 
                     $ADUser = Get-ADUser -Identity $User
                     
-                }
-                else {
-                    Write-Host "| SKIPPING user $($Permission.User) in $($PFIdentity)" 
-                    break
                 }
                 
                 if($ADUser.Enabled -eq $true) {
@@ -200,4 +210,4 @@ else {
     Write-Warning 'No or non-existing public folder specified'
 }
 
-Write-Host "Done"
+Write-Host 'Done'
