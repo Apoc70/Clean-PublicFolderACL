@@ -34,7 +34,7 @@
     1.0     Initial community release 
     1.1     Fixed group replacement logic
     1.2     Script optimzation
-    1.3     Updated public fodler handlins
+    1.3     Updated public fodler handling
 	
     .PARAMETER RootPublicFolder
     Root public folder for recurse checkign of ACLs
