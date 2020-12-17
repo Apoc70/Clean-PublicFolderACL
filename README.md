@@ -24,16 +24,20 @@ Only validate ACL, do not make any changes. Affects only ACL entries which are n
 
 Skip orphaned users check
 
+### Recurse
+
+Check public folder client permission recursively. Without this switch the script will only check the client permissions in the folder defined in RootPublicFolder
+
 ## Examples
 
 ``` PowerShell
-.\Clean-PublicFolderACL.ps1 -RootPublicFolder "\MYPF" -PublicFolderServer EX200701 -ValidateOnly
+.\Clean-PublicFolderACL.ps1 -RootPublicFolder "\MYPF" -PublicFolderServer EX2010 -ValidateOnly -Recurse
 ```
 
-Validate ACLs on public folder \MYPF and all of it's child public folders on Exchange server EX200701
+Validate ACLs on public folder \MYPF and all of it's child public folders on Exchange server EX2010
 
 ``` PowerShell
-.\Clean-PublicFolderACL.ps1 -RootPublicFolder "\MYPF" -PublicFolderServer EX200701
+.\Clean-PublicFolderACL.ps1 -RootPublicFolder "\MYPF" -PublicFolderServer EX200701 -Recurse
 ```
 
 Clean ACLs on public folder \MYPF and all of it's child public folders on Exchange server EX200701
